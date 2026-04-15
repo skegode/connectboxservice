@@ -9,5 +9,8 @@ namespace ConnectBoxService.Services
 
         // Method 2: ADD THIS LINE so the Worker can call the allocation logic
         Task AllocateContractsToAgentsAsync(int categoryId, int orgId);
+
+        // Method 3: Existing Upsert logic
+        Task SyncPaymentsAsync(int contractId, List<LoanDto> loans);
     }
 }

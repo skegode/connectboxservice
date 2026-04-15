@@ -94,12 +94,12 @@ namespace ConnectBoxService.Services
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 request.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                _logger.LogInformation("Calling loans endpoint: {Url}", $"{baseUrl}{loansEndpoint}");
+                ///_logger.LogInformation("Calling loans endpoint: {Url}", $"{baseUrl}{loansEndpoint}");
 
                 var response = await _httpClient.SendAsync(request);
                 var body = await response.Content.ReadAsStringAsync();
 
-                _logger.LogInformation("Loans response: {StatusCode} | Body: {Body}", response.StatusCode, body);
+                ///_logger.LogInformation("Loans response: {StatusCode} | Body: {Body}", response.StatusCode, body);
 
                 if (!response.IsSuccessStatusCode)
                 {

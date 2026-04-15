@@ -46,10 +46,10 @@ namespace ConnectBoxService
                 {
                     foreach (var connection in _connections)
                     {
-                        bool isDue = !_lastRunTimes.TryGetValue(connection.ContractId, out var lastRun)
-                                     || DateTime.UtcNow - lastRun >= TimeSpan.FromMinutes(connection.DataRefreshCycleMinutes);
+                        /// Due for data fetch
+                        bool dataDue = connection.LastDataFetch.HasValue ? DateTime.UtcNow - connection.LastDataFetch >= TimeSpan.FromMinutes(connection.DataRefreshCycleMinutes) : true;
 
-                        if (isDue)
+                        if (dataDue)
                         {
                             _logger.LogInformation(
                                 "Syncing ContractId {ContractId} ({Name}, every {Minutes} mins)...",
@@ -62,6 +62,20 @@ namespace ConnectBoxService
 
                             _lastRunTimes[connection.ContractId] = DateTime.UtcNow;
                         }
+
+                        /// Due for payments fetch
+                        bool paymentsDue = connection.LastPaymentsFetch.HasValue ? DateTime.UtcNow - connection.LastPaymentsFetch >= TimeSpan.FromMinutes(connection.PaymentsRefreshCycleMinutes) : true;
+
+                        if (paymentsDue)
+                        {
+                            _logger.LogInformation(
+                               "Payments sync for ContractId {ContractId} ({Name}, every {Minutes} mins)...",
+                               connection.ContractId,
+                               connection.PaymentsRefreshCycleName,
+                               connection.PaymentsRefreshCycleMinutes);
+
+                            await SyncPaymentsAsync(connection, stoppingToken);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -73,6 +87,49 @@ namespace ConnectBoxService
             }
 
             _logger.LogInformation("LoanSyncWorker stopped.");
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Payments sync  (mirrors SyncContractAsync structure)
+        // ─────────────────────────────────────────────────────────────────────
+        private async Task SyncPaymentsAsync(ContractLmsConnection connection, CancellationToken stoppingToken)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var loanApiService = scope.ServiceProvider.GetRequiredService<ILoanApiService>();
+                var contractDataSvc = scope.ServiceProvider.GetRequiredService<IContractDataService>();
+
+                // Token (re-uses / refreshes the worker-level cache)
+                if (_cachedToken == null || DateTime.UtcNow >= _tokenExpiry)
+                {
+                    _logger.LogInformation("Requesting new API token for {Entity}...", connection.LmsEntityId);
+                    _cachedToken = await loanApiService.GetTokenAsync(connection.LmsEntityId);
+
+                    if (_cachedToken == null)
+                    {
+                        _logger.LogError("Failed to obtain API token. Skipping payments for ContractId {ContractId}.", connection.ContractId);
+                        return;
+                    }
+                    _tokenExpiry = DateTime.UtcNow.AddMinutes(55);
+                }
+
+                // Fetch current loan snapshot from LMS
+                var freshLoans = await loanApiService.GetLoansAsync(_cachedToken, connection);
+
+                if (freshLoans.Count == 0)
+                {
+                    _logger.LogWarning("No loans returned for payments sync, ContractId {ContractId}.", connection.ContractId);
+                    return;
+                }
+
+                // Detect payments via OutSourcedAmount delta & persist
+                await contractDataSvc.SyncPaymentsAsync(connection.ContractId, freshLoans);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during payments sync for ContractId {ContractId}.", connection.ContractId);
+            }
         }
 
         private async Task LoadConnectionsAsync()

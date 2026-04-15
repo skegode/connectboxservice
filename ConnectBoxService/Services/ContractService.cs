@@ -38,6 +38,10 @@ namespace ConnectBoxService.Services
                     l.MaxAmount,
                     l.MinOlb,
                     l.MaxOlb,
+                    l.LastDataFetch,
+                    l.NextDataFetch,
+                    l.LastPaymentsFetch,
+                    l.NextPaymentsFetch,
                     c.EntityId,
                     o.LmsEntityId,
                     d.Name            AS DataRefreshCycleName,
@@ -77,9 +81,10 @@ namespace ConnectBoxService.Services
                     MaxAmount = reader["MaxAmount"] == DBNull.Value ? (decimal?)null : Convert.ToDecimal(reader["MaxAmount"]),
                     MinOlb = reader["MinOlb"] == DBNull.Value ? (decimal?)null : Convert.ToDecimal(reader["MinOlb"]),
                     MaxOlb = reader["MaxOlb"] == DBNull.Value ? (decimal?)null : Convert.ToDecimal(reader["MaxOlb"]),
-
-
-
+                    LastDataFetch = reader["LastDataFetch"] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(reader["LastDataFetch"]),
+                    NextDataFetch = reader["NextDataFetch"] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(reader["NextDataFetch"]),
+                    LastPaymentsFetch = reader["LastPaymentsFetch"] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(reader["LastPaymentsFetch"]),
+                    NextPaymentsFetch = reader["NextPaymentsFetch"] == DBNull.Value ? (DateTime?)null : Convert.ToDateTime(reader["NextPaymentsFetch"]),
                 });
             }
 

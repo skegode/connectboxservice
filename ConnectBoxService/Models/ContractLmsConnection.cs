@@ -20,6 +20,10 @@ namespace ConnectBoxService.Models
         public decimal? MaxAmount { get; set; }
         public decimal? MinOlb { get; set; }
         public decimal? MaxOlb { get; set; }
+        public DateTime? LastDataFetch { get; set; }
+        public DateTime? NextDataFetch { get; set; }
+        public DateTime? LastPaymentsFetch { get; set; }
+        public DateTime? NextPaymentsFetch { get; set; }
         public string CategoryId { get; set; }
 
         // From Companies (via Contracts)
