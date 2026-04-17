@@ -11,6 +11,6 @@ namespace ConnectBoxService.Services
         Task AllocateContractsToAgentsAsync(int categoryId, int orgId);
 
         // Method 3: Existing Upsert logic
-        Task SyncPaymentsAsync(int contractId, List<LoanDto> loans);
+        Task SyncPaymentsAsync(int contractId, string EntityId, List<LoanDto> loans);
     }
 }

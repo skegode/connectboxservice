@@ -47,7 +47,7 @@ namespace ConnectBoxService
                     foreach (var connection in _connections)
                     {
                         /// Due for data fetch
-                        bool dataDue = connection.LastDataFetch.HasValue ? DateTime.UtcNow - connection.LastDataFetch >= TimeSpan.FromMinutes(connection.DataRefreshCycleMinutes) : true;
+                        bool dataDue = connection.NextDataFetch.HasValue ? connection.NextDataFetch <= DateTime.Now : true;
 
                         if (dataDue)
                         {
@@ -64,7 +64,7 @@ namespace ConnectBoxService
                         }
 
                         /// Due for payments fetch
-                        bool paymentsDue = connection.LastPaymentsFetch.HasValue ? DateTime.UtcNow - connection.LastPaymentsFetch >= TimeSpan.FromMinutes(connection.PaymentsRefreshCycleMinutes) : true;
+                        bool paymentsDue = connection.NextPaymentsFetch.HasValue ? connection.NextPaymentsFetch <= DateTime.Now : true;
 
                         if (paymentsDue)
                         {
@@ -124,7 +124,7 @@ namespace ConnectBoxService
                 }
 
                 // Detect payments via OutSourcedAmount delta & persist
-                await contractDataSvc.SyncPaymentsAsync(connection.ContractId, freshLoans);
+                await contractDataSvc.SyncPaymentsAsync(connection.ContractId,connection.EntityId, freshLoans);
             }
             catch (Exception ex)
             {

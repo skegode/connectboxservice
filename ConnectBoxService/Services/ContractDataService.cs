@@ -40,38 +40,39 @@ namespace ConnectBoxService.Services
                         MERGE INTO ContractData AS target
                         USING (SELECT @ContractId AS ContractId, @LoanId AS LoanId) AS source
                             ON target.ContractId = source.ContractId
-                           AND target.LoanId     = source.LoanId
+                           AND target.LoanId = source.LoanId
                         WHEN MATCHED THEN
                             UPDATE SET
-                                FirstName        = @FirstName,
-                                OtherNames       = @OtherNames,
-                                PhoneNumber      = @PhoneNumber,
-                                EmailAddrerss    = @EmailAddress,
-                                IdOrPassport     = @IdOrPassport,
-                                AmountDisbursed  = @AmountDisbursed,
-                                Installments     = @Installments,
-                                ArrearsAmount    = @ArrearsAmount,
-                                DaysInArrears    = @DaysInArrears,
-                                OLB              = @Olb,
-                                Branch           = @Branch,
+                                FirstName = @FirstName,
+                                OtherNames = @OtherNames,
+                                PhoneNumber = @PhoneNumber,
+                                EmailAddrerss = @EmailAddress,
+                                IdOrPassport = @IdOrPassport,
+                                AmountDisbursed = @AmountDisbursed,
+                                Installments = @Installments,
+                                ArrearsAmount = @ArrearsAmount,
+                                DaysInArrears = @DaysInArrears,
+                                OLB = @Olb,
+                                Branch = @Branch,
                                 OutSourcedAmount = @OutSourcedAmount,
-                                EntityId         = @EntityId,
-                                CategoryId       = @CategoryId,
-                                Penalty          = @Penalty,
-                                Expectedduedate  = GETDATE(),
-                                BorrowerRefId    = @BorrowerId,
-                                LoanRefId        = @LoanId
+                                InitialOutSourcedAmount = @OutSourcedAmount,
+                                EntityId = @EntityId,
+                                CategoryId = @CategoryId,
+                                Penalty = @Penalty,
+                                Expectedduedate = GETDATE(),
+                                BorrowerRefId = @BorrowerId,
+                                LoanRefId = @LoanId
                         WHEN NOT MATCHED THEN
                             INSERT (
                                 ContractId, LoanId, FirstName, OtherNames, PhoneNumber,
                                 EmailAddrerss, IdOrPassport, AmountDisbursed, Installments,
-                                ArrearsAmount, DaysInArrears, OLB, Branch, OutSourcedAmount,
+                                ArrearsAmount, DaysInArrears, OLB, Branch, OutSourcedAmount,InitialOutSourcedAmount, 
                                 EntityId, CategoryId, Penalty, Expectedduedate, BorrowerRefId, LoanRefId
                             )
                             VALUES (
                                 @ContractId, @LoanId, @FirstName, @OtherNames, @PhoneNumber,
                                 @EmailAddress, @IdOrPassport, @AmountDisbursed, @Installments,
-                                @ArrearsAmount, @DaysInArrears, @Olb, @Branch, @OutSourcedAmount,
+                                @ArrearsAmount, @DaysInArrears, @Olb, @Branch, @OutSourcedAmount, @OutSourcedAmount,
                                 @EntityId, @CategoryId, @Penalty, GETDATE(), @BorrowerId, @LoanId
                             );
                         """;
@@ -100,7 +101,7 @@ namespace ConnectBoxService.Services
                     upserted++;
                 }
 
-                using var logCmd = new SqlCommand("INSERT INTOContractLmsLogs (ContractId,Records,CreatedDate) VALUES (@id,@records,GETDATE())", conn, transaction);
+                using var logCmd = new SqlCommand("INSERT INTO ContractLmsLogs (ContractId,Records,CreatedDate) VALUES (@id,@records,GETDATE())", conn, transaction);
                 logCmd.Parameters.AddWithValue("@id", contractId);
                 logCmd.Parameters.AddWithValue("@records", upserted);
                 await logCmd.ExecuteNonQueryAsync();
@@ -111,6 +112,7 @@ namespace ConnectBoxService.Services
                     "WHERE id=@id", conn, transaction);
                 upCmd.Parameters.AddWithValue("@id", contractId);
                 await upCmd.ExecuteNonQueryAsync();
+                transaction.Commit();
 
                 _logger.LogInformation("Upserted {Count} loan records for CategoryId {CategoryId}.", upserted, categoryId);
             }
@@ -215,7 +217,7 @@ namespace ConnectBoxService.Services
         ///   • Updates ContractData  → OutSourcedAmount, AmountPaid, DateUpdated
         ///   • Inserts RepaymentHistory row with InitialOlb / AmountPaid / NewOlb
         /// </summary>
-        public async Task SyncPaymentsAsync(int contractId, List<LoanDto> freshLoans)
+        public async Task SyncPaymentsAsync(int contractId, string EntityId, List<LoanDto> freshLoans)
         {
             if (freshLoans == null || freshLoans.Count == 0) return;
 
@@ -229,10 +231,10 @@ namespace ConnectBoxService.Services
 
             const string fetchSql = """
             SELECT Id, LoanRefId, AssignedAgent, OLB, OutSourcedAmount, ptpid
-            FROM   ContractData
-            WHERE  ContractId = @contractId
-              AND  IsDeleted  = 0
-              AND  LoanRefId  IS NOT NULL
+            FROM ContractData
+            WHERE ContractId = @contractId
+              AND IsDeleted = 0
+              AND LoanRefId IS NOT NULL
             """;
 
             await using (var fetchCmd = new SqlCommand(fetchSql, conn))
@@ -262,7 +264,7 @@ namespace ConnectBoxService.Services
             }
 
             // ── 2. Detect payments ────────────────────────────────────────────────
-            var payments = new List<(int ContractDataId, int? AgentId, decimal InitialOlb, decimal AmountPaid, decimal NewOlb, decimal NewOutSourced, int? ptpid)>();
+            var payments = new List<(int ContractDataId, int? AgentId, decimal InitialOlb, decimal AmountPaid, decimal NewOlb,int NewArrearsDays, decimal NewArrears, decimal NewOutSourced, int? ptpid)>();
 
             foreach (var loan in freshLoans)
             {
@@ -277,7 +279,9 @@ namespace ConnectBoxService.Services
                 if (newOutSourced < existing.StoredOutSourced)
                 {
                     decimal amountPaid = existing.StoredOutSourced - newOutSourced;
-                    decimal newOlb = loan.LoanBalance;           // fresh OLB from API
+                    decimal newOlb = loan.LoanBalance;
+                    int newArrearsDays = loan.DaysInArrears;
+                    decimal newArrears = loan.Arrears;
 
                     payments.Add((
                         ContractDataId: existing.Id,
@@ -285,6 +289,8 @@ namespace ConnectBoxService.Services
                         InitialOlb: existing.StoredOlb,
                         AmountPaid: amountPaid,
                         NewOlb: newOlb,
+                        NewArrearsDays: newArrearsDays,
+                        NewArrears: newArrears,
                         NewOutSourced: newOutSourced,
                         ptpid: existing.ptpid
                     ));
@@ -297,6 +303,21 @@ namespace ConnectBoxService.Services
 
             if (payments.Count == 0)
             {
+                const string stampSql = """
+                UPDATE ContractLmsConnections
+                SET LastPaymentsFetch = GETDATE(),
+                NextPaymentsFetch = DATEADD(
+                    MINUTE,
+                    (SELECT DurationMinutes FROM RefreshCycles
+                    WHERE  id = ContractLmsConnections.PaymentsRefreshCycle),
+                    GETDATE())
+                WHERE  ContractId = @contractId
+                """;
+
+                await using var stampCmd = new SqlCommand(stampSql, conn);
+                stampCmd.Parameters.AddWithValue("@contractId", contractId);
+                await stampCmd.ExecuteNonQueryAsync();
+
                 _logger.LogInformation("SyncPayments: No new payments detected for ContractId {ContractId}.", contractId);
                 return;
             }
@@ -310,17 +331,21 @@ namespace ConnectBoxService.Services
                     // 3a. Update ContractData
                     const string updateSql = """
                     UPDATE ContractData
-                    SET    OutSourcedAmount = @newOutSourced,
-                           AmountRepaid       = ISNULL(AmountRepaid, 0) + @amountPaid,
-                           OLB              = @newOlb,
-                           DateUpdated      = GETDATE()
-                    WHERE  Id = @id
+                    SET OutSourcedAmount = @newOutSourced,
+                        AmountRepaid = ISNULL(AmountRepaid, 0) + @amountPaid,
+                        OLB = @newOlb,
+                        DaysInArrears = @newArrearsDays,
+                        ArrearsAmount = @newArrears,
+                        DateUpdated = GETDATE()
+                    WHERE Id = @id
                     """;
 
                     await using var upCmd = new SqlCommand(updateSql, conn, tx);
                     upCmd.Parameters.AddWithValue("@newOutSourced", p.NewOutSourced);
                     upCmd.Parameters.AddWithValue("@amountPaid", p.AmountPaid);
                     upCmd.Parameters.AddWithValue("@newOlb", p.NewOlb);
+                    upCmd.Parameters.AddWithValue("@newArrearsDays", p.NewArrearsDays);
+                    upCmd.Parameters.AddWithValue("@newArrears", p.NewArrears);
                     upCmd.Parameters.AddWithValue("@id", p.ContractDataId);
                     await upCmd.ExecuteNonQueryAsync();
 
@@ -338,7 +363,7 @@ namespace ConnectBoxService.Services
                                 WHEN PromisedAmount - @amountPaid <= 0 THEN 1
                                 ELSE 0 
                             END
-                            WHERE  Id = @id
+                            WHERE Id = @id
                             """;
                         await using var upPtpCmd = new SqlCommand(ptpUpdateSql, conn, tx);
                         upPtpCmd.Parameters.AddWithValue("@id", p.ptpid);
@@ -348,10 +373,8 @@ namespace ConnectBoxService.Services
 
                     // 3b. Insert RepaymentHistory
                     const string historySql = """
-                    INSERT INTO RepaymentHistory
-                        (AgentId, ContractId, ContractDataId, InitialOlb, AmountPaid, NewOlb)
-                    VALUES
-                        (@agentId, @contractId, @contractDataId, @initialOlb, @amountPaid, @newOlb)
+                    INSERT INTO RepaymentHistory (AgentId, ContractId, ContractDataId, InitialOlb, AmountPaid, NewOlb, Entityid, PaymentDate)
+                    VALUES (@agentId, @contractId, @contractDataId, @initialOlb, @amountPaid, @newOlb, @Entityid, GETDATE())
                     """;
 
                     await using var histCmd = new SqlCommand(historySql, conn, tx);
@@ -361,19 +384,20 @@ namespace ConnectBoxService.Services
                     histCmd.Parameters.AddWithValue("@initialOlb", p.InitialOlb);
                     histCmd.Parameters.AddWithValue("@amountPaid", p.AmountPaid);
                     histCmd.Parameters.AddWithValue("@newOlb", p.NewOlb);
+                    histCmd.Parameters.AddWithValue("@Entityid", EntityId);
                     await histCmd.ExecuteNonQueryAsync();
                 }
 
                 // 3c. Stamp the LastPaymentsFetch on the connection row
                 const string stampSql = """
                 UPDATE ContractLmsConnections
-                SET    LastPaymentsFetch = GETDATE(),
-                       NextPaymentsFetch = DATEADD(
-                           MINUTE,
-                           (SELECT DurationMinutes FROM RefreshCycles
-                            WHERE  id = ContractLmsConnections.PaymentsRefreshCycle),
-                           GETDATE())
-                WHERE  ContractId = @contractId
+                SET LastPaymentsFetch = GETDATE(),
+                NextPaymentsFetch = DATEADD(
+                    MINUTE,
+                    (SELECT DurationMinutes FROM RefreshCycles
+                    WHERE  id = ContractLmsConnections.PaymentsRefreshCycle),
+                    GETDATE())
+                WHERE ContractId = @contractId
                 """;
 
                 await using var stampCmd = new SqlCommand(stampSql, conn, tx);
