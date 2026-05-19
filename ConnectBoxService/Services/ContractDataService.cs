@@ -106,11 +106,13 @@ namespace ConnectBoxService.Services
                 logCmd.Parameters.AddWithValue("@records", upserted);
                 await logCmd.ExecuteNonQueryAsync();
 
-                using var upCmd = new SqlCommand("update ContractLmsConnections " +
-                    "SET LastDataFetch=getdate(), " +
-                    "NextDataFetch = DATEADD(MINUTE,(select RefreshCycles.DurationMinutes FROM RefreshCycles where RefreshCycles.id=ContractLmsConnections.DataRefreshCycle),getdate()) " +
-                    "WHERE id=@id", conn, transaction);
+                using var upCmd = new SqlCommand(@"update ContractLmsConnections 
+                    SET LastDataFetch=getdate(), 
+                    NextDataFetch = DATEADD(MINUTE,(select RefreshCycles.DurationMinutes FROM RefreshCycles where RefreshCycles.id=ContractLmsConnections.DataRefreshCycle),getdate()) 
+                    WHERE ContractId=@id", conn, transaction);
+
                 upCmd.Parameters.AddWithValue("@id", contractId);
+
                 await upCmd.ExecuteNonQueryAsync();
                 transaction.Commit();
 

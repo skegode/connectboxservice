@@ -46,6 +46,24 @@ namespace ConnectBoxService
                 {
                     foreach (var connection in _connections)
                     {
+                        _logger.LogInformation("......................................PAYMENTS DATA");
+
+                        /// Due for payments fetch
+                        bool paymentsDue = connection.NextPaymentsFetch.HasValue ? connection.NextPaymentsFetch <= DateTime.Now : true;
+
+                        if (paymentsDue)
+                        {
+                            _logger.LogInformation(
+                               "Payments sync for ContractId {ContractId} ({Name}, every {Minutes} mins)...",
+                               connection.ContractId,
+                               connection.PaymentsRefreshCycleName,
+                               connection.PaymentsRefreshCycleMinutes);
+
+                            await SyncPaymentsAsync(connection, stoppingToken);
+                        }
+
+                        _logger.LogInformation("......................................RECORDS DATA");
+
                         /// Due for data fetch
                         bool dataDue = connection.NextDataFetch.HasValue ? connection.NextDataFetch <= DateTime.Now : true;
 
@@ -61,20 +79,6 @@ namespace ConnectBoxService
                             await SyncContractAsync(connection, stoppingToken);
 
                             _lastRunTimes[connection.ContractId] = DateTime.UtcNow;
-                        }
-
-                        /// Due for payments fetch
-                        bool paymentsDue = connection.NextPaymentsFetch.HasValue ? connection.NextPaymentsFetch <= DateTime.Now : true;
-
-                        if (paymentsDue)
-                        {
-                            _logger.LogInformation(
-                               "Payments sync for ContractId {ContractId} ({Name}, every {Minutes} mins)...",
-                               connection.ContractId,
-                               connection.PaymentsRefreshCycleName,
-                               connection.PaymentsRefreshCycleMinutes);
-
-                            await SyncPaymentsAsync(connection, stoppingToken);
                         }
                     }
                 }
