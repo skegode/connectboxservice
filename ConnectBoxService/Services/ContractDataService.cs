@@ -79,22 +79,22 @@ namespace ConnectBoxService.Services
 
                     await using var cmd = new SqlCommand(sql, conn, transaction);
                     cmd.Parameters.AddWithValue("@ContractId", contractId);
-                    cmd.Parameters.AddWithValue("@LoanId", loan.Id);
-                    cmd.Parameters.AddWithValue("@BorrowerId", loan.borrowerId);
+                    cmd.Parameters.AddWithValue("@LoanId", int.TryParse(loan.Id, out int loanIdInt) ? loanIdInt : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@BorrowerId", int.TryParse(loan.borrowerId, out int borrowerIdInt) ? borrowerIdInt : (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@FirstName", loan.FirstName ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@OtherNames", loan.OtherName ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@PhoneNumber", loan.PhoneNumber ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@EmailAddress", loan.EmailAddress ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@IdOrPassport", loan.NationalId ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@AmountDisbursed", loan.AmountToDisburse);
-                    cmd.Parameters.AddWithValue("@Installments", loan.RepaymentPeriod);
+                    cmd.Parameters.AddWithValue("@Installments", int.TryParse(loan.RepaymentPeriod, out int installments) ? installments : (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@ArrearsAmount", loan.Arrears);
                     cmd.Parameters.AddWithValue("@DaysInArrears", loan.DaysInArrears);
                     cmd.Parameters.AddWithValue("@Olb", loan.LoanBalance);
                     cmd.Parameters.AddWithValue("@Branch", loan.Branch ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@OutSourcedAmount", loan.OutsourcedAmount);
-                    cmd.Parameters.AddWithValue("@EntityId", entityId);
-                    cmd.Parameters.AddWithValue("@CategoryId", categoryId);
+                    cmd.Parameters.AddWithValue("@EntityId", int.TryParse(entityId, out int entityIdInt) ? entityIdInt : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@CategoryId", int.TryParse(categoryId, out int categoryIdInt) ? categoryIdInt : (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@Penalty", loan.Penalty);
 
                     await cmd.ExecuteNonQueryAsync();
@@ -106,14 +106,18 @@ namespace ConnectBoxService.Services
                 logCmd.Parameters.AddWithValue("@records", upserted);
                 await logCmd.ExecuteNonQueryAsync();
 
-                using var upCmd = new SqlCommand(@"update ContractLmsConnections 
-                    SET LastDataFetch=getdate(), 
-                    NextDataFetch = DATEADD(MINUTE,(select RefreshCycles.DurationMinutes FROM RefreshCycles where RefreshCycles.id=ContractLmsConnections.DataRefreshCycle),getdate()) 
+                using var upCmd = new SqlCommand(@"update ContractLmsConnections
+                    SET LastDataFetch=getdate(),
+                    NextDataFetch = DATEADD(MINUTE,(select RefreshCycles.DurationMinutes FROM RefreshCycles where RefreshCycles.id=ContractLmsConnections.DataRefreshCycle),getdate())
                     WHERE ContractId=@id", conn, transaction);
 
                 upCmd.Parameters.AddWithValue("@id", contractId);
-
                 await upCmd.ExecuteNonQueryAsync();
+
+                using var campCmd = new SqlCommand(@"UPDATE CallCampaigns SET Records=(SELECT COUNT(*) FROM ContractData WHERE ContractId=@id AND IsDeleted=0) WHERE ContractId=@id", conn, transaction);
+                campCmd.Parameters.AddWithValue("@id", contractId);
+                await campCmd.ExecuteNonQueryAsync();
+
                 transaction.Commit();
 
                 _logger.LogInformation("Upserted {Count} loan records for CategoryId {CategoryId}.", upserted, categoryId);

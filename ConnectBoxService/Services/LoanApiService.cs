@@ -69,6 +69,64 @@ namespace ConnectBoxService.Services
         /// Calls POST /loans/GetLoansByFilter with the bearer token and returns the list of loans.
         /// No filters applied — fetch all loans for the entity in the token.
         /// </summary>
+        public async Task<List<LoanDto>> GetDueTodayLoansAsync(string token, int top = 2000)
+        {
+            var baseUrl = _config["LoanApi:BaseUrl"]!;
+            var url = $"{baseUrl}/loans/due-today?top={top}";
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+                var response = await _httpClient.SendAsync(request);
+                var body = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogError("due-today request failed: {StatusCode} {Body}", response.StatusCode, body);
+                    return new List<LoanDto>();
+                }
+
+                var result = JsonSerializer.Deserialize<DueTodayApiResponse>(body, _jsonOptions);
+
+                if (result?.Data == null || result.Data.Count == 0)
+                {
+                    _logger.LogWarning("due-today returned no loans. Body: {Body}", body);
+                    return new List<LoanDto>();
+                }
+
+                // Map DueTodayLoanDto → LoanDto so UpsertLoansAsync can be reused
+                var loans = result.Data.Select(d => new LoanDto
+                {
+                    Id = d.LoanId,
+                    FirstName = d.FirstName,
+                    OtherName = d.OtherName,
+                    PhoneNumber = d.PhoneNumber,
+                    EmailAddress = d.EmailAddress,
+                    NationalId = d.NationalId,
+                    AmountToDisburse = d.AmountToDisburse,
+                    LoanBalance = d.LoanBalance,
+                    OutsourcedAmount = d.DueTodayAmount,
+                    Arrears = 0,
+                    DaysInArrears = 0,
+                    ProductName = d.ProductName,
+                    Penalty = 0,
+                    Branch = "",
+                    RepaymentPeriod = "",
+                    borrowerId = ""
+                }).ToList();
+
+                _logger.LogInformation("Fetched {Count} due-today loans.", loans.Count);
+                return loans;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception calling due-today endpoint: {Url}", url);
+                return new List<LoanDto>();
+            }
+        }
+
         public async Task<List<LoanDto>> GetLoansAsync(string token, ContractLmsConnection connection)
         {
             var baseUrl = _config["LoanApi:BaseUrl"]!;

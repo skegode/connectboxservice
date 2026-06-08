@@ -177,7 +177,9 @@ namespace ConnectBoxService
                 }
 
                 // ── Step 2: Fetch loans ───────────────────────────────────
-                var loans = await loanApiService.GetLoansAsync(_cachedToken, connection);
+                var loans = connection.IsDueToday
+                    ? await loanApiService.GetDueTodayLoansAsync(_cachedToken)
+                    : await loanApiService.GetLoansAsync(_cachedToken, connection);
 
                 _logger.LogInformation(
                     "Fetched {Count} loans for ContractId {ContractId} (EntityId: {EntityId}).",

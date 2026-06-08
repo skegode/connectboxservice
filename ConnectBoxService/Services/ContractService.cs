@@ -28,10 +28,11 @@ namespace ConnectBoxService.Services
             const string sql = """"
                 SELECT
                     l.Id,
-                    l.ContractId,           
-                    l.DataRefreshCycle,     
-                    l.PaymentsRefreshCycle, 
+                    l.ContractId,
+                    l.DataRefreshCycle,
+                    l.PaymentsRefreshCycle,
                 	G.ID AS CategoryId,
+                    c.DataSource,
                     l.MinDays,
                     l.MaxDays,
                     l.MinAmount,
@@ -54,7 +55,7 @@ namespace ConnectBoxService.Services
                 INNER JOIN RefreshCycles d ON d.id        = l.DataRefreshCycle
                 INNER JOIN RefreshCycles p ON p.id        = l.PaymentsRefreshCycle 
                 INNER JOIN Categories G ON G.ContractyID=C.ID
-                WHERE c.DataSource = 2
+                WHERE c.DataSource IN (2, 3)
                 """";
 
             await using var cmd    = new SqlCommand(sql, conn);
@@ -75,6 +76,7 @@ namespace ConnectBoxService.Services
                     DataRefreshCycleMinutes    = reader["DataRefreshCycleMinutes"]    == DBNull.Value ? 60 : Convert.ToInt32(reader["DataRefreshCycleMinutes"]),
                     PaymentsRefreshCycleName   = reader["PaymentsRefreshCycleName"]   == DBNull.Value ? "" : reader["PaymentsRefreshCycleName"].ToString()!,
                     PaymentsRefreshCycleMinutes = reader["PaymentsRefreshCycleMinutes"] == DBNull.Value ? 60 : Convert.ToInt32(reader["PaymentsRefreshCycleMinutes"]),
+                    IsDueToday = reader["DataSource"] != DBNull.Value && Convert.ToInt32(reader["DataSource"]) == 3,
                     MinDays = reader["MinDays"] == DBNull.Value ? (int?)null : Convert.ToInt32(reader["MinDays"]),
                     MaxDays = reader["MaxDays"] == DBNull.Value ? (int?)null : Convert.ToInt32(reader["MaxDays"]),
                     MinAmount = reader["MinAmount"] == DBNull.Value ? (decimal?)null : Convert.ToDecimal(reader["MinAmount"]),

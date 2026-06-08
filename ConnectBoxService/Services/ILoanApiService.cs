@@ -4,7 +4,8 @@ namespace ConnectBoxService.Services
 {
     public interface ILoanApiService
     {
-        Task<string?>          GetTokenAsync(string EntityId);
+        Task<string?> GetTokenAsync(string EntityId);
         Task<List<LoanDto>> GetLoansAsync(string token, ContractLmsConnection connection);
+        Task<List<LoanDto>> GetDueTodayLoansAsync(string token, int top = 2000);
     }
 }

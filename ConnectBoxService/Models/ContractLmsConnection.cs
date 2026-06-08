@@ -26,6 +26,9 @@ namespace ConnectBoxService.Models
         public DateTime? NextPaymentsFetch { get; set; }
         public string CategoryId { get; set; }
 
+        /// <summary>True when this contract syncs due-today loans (DataSource=3) instead of arrears.</summary>
+        public bool IsDueToday { get; set; }
+
         // From Companies (via Contracts)
         public string EntityId { get; set; } = "";
         public string LmsEntityId { get; set; } = "";
