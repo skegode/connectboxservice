@@ -61,19 +61,21 @@ namespace ConnectBoxService.Services
                                 Penalty = @Penalty,
                                 Expectedduedate = GETDATE(),
                                 BorrowerRefId = @BorrowerId,
-                                LoanRefId = @LoanId
+                                LoanRefId = @LoanId,
+                                campaignId = (SELECT TOP 1 ID FROM CallCampaigns WHERE ContractID = @ContractId AND Status = 1 ORDER BY ID DESC)
                         WHEN NOT MATCHED THEN
                             INSERT (
                                 ContractId, LoanId, FirstName, OtherNames, PhoneNumber,
                                 EmailAddrerss, IdOrPassport, AmountDisbursed, Installments,
-                                ArrearsAmount, DaysInArrears, OLB, Branch, OutSourcedAmount,InitialOutSourcedAmount, 
-                                EntityId, CategoryId, Penalty, Expectedduedate, BorrowerRefId, LoanRefId
+                                ArrearsAmount, DaysInArrears, OLB, Branch, OutSourcedAmount, InitialOutSourcedAmount,
+                                EntityId, CategoryId, Penalty, Expectedduedate, BorrowerRefId, LoanRefId, campaignId
                             )
                             VALUES (
                                 @ContractId, @LoanId, @FirstName, @OtherNames, @PhoneNumber,
                                 @EmailAddress, @IdOrPassport, @AmountDisbursed, @Installments,
                                 @ArrearsAmount, @DaysInArrears, @Olb, @Branch, @OutSourcedAmount, @OutSourcedAmount,
-                                @EntityId, @CategoryId, @Penalty, GETDATE(), @BorrowerId, @LoanId
+                                @EntityId, @CategoryId, @Penalty, GETDATE(), @BorrowerId, @LoanId,
+                                (SELECT TOP 1 ID FROM CallCampaigns WHERE ContractID = @ContractId AND Status = 1 ORDER BY ID DESC)
                             );
                         """;
 
