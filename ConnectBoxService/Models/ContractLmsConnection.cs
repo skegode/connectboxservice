@@ -20,13 +20,19 @@ namespace ConnectBoxService.Models
         public decimal? MaxAmount { get; set; }
         public decimal? MinOlb { get; set; }
         public decimal? MaxOlb { get; set; }
+        public decimal? MinArrears { get; set; }
+        public decimal? MaxArrears { get; set; }
         public DateTime? LastDataFetch { get; set; }
         public DateTime? NextDataFetch { get; set; }
         public DateTime? LastPaymentsFetch { get; set; }
         public DateTime? NextPaymentsFetch { get; set; }
         public string CategoryId { get; set; }
 
+        // Commission rate (%) stored on the contract — used to calculate agent commission per payment
+        public decimal CommissionRate { get; set; }
+
         // From Companies (via Contracts)
+        public int CompanyId { get; set; }
         public string EntityId { get; set; } = "";
         public string LmsEntityId { get; set; } = "";
 

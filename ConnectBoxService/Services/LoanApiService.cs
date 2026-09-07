@@ -66,6 +66,55 @@ namespace ConnectBoxService.Services
         }
 
         /// <summary>
+        /// Calls GET /api/Loans/payments and returns payment records in the date window.
+        /// </summary>
+        public async Task<List<LmsPaymentDto>> GetPaymentsAsync(string token, DateTime dateFrom, DateTime dateTo)
+        {
+            var baseUrl = _config["LoanApi:BaseUrl"]!;
+            var endpoint = _config["LoanApi:PaymentsEndpoint"]!;
+
+            var query = $"?fromDate={dateFrom:yyyy-MM-dd}&toDate={dateTo:yyyy-MM-dd}&transType=2&limit=10000&offset=0";
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}{endpoint}{query}");
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+                var response = await _httpClient.SendAsync(request);
+                var body     = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogError("Payments request failed: {StatusCode} {Body}", response.StatusCode, body);
+                    return new List<LmsPaymentDto>();
+                }
+
+                _logger.LogDebug("Payments raw response: {Body}", body);
+
+                // Try the wrapped envelope first; fall back to a bare array.
+                List<LmsPaymentDto>? list = null;
+                try
+                {
+                    var parsed = JsonSerializer.Deserialize<PaymentsApiResponse>(body, _jsonOptions);
+                    list = parsed?.Data;
+                }
+                catch (JsonException)
+                {
+                    list = JsonSerializer.Deserialize<List<LmsPaymentDto>>(body, _jsonOptions);
+                }
+
+                list ??= new List<LmsPaymentDto>();
+                _logger.LogInformation("Fetched {Count} payment(s) from LMS.", list.Count);
+                return list;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Exception calling payments endpoint.");
+                return new List<LmsPaymentDto>();
+            }
+        }
+
+        /// <summary>
         /// Calls POST /loans/GetLoansByFilter with the bearer token and returns the list of loans.
         /// No filters applied — fetch all loans for the entity in the token.
         /// </summary>

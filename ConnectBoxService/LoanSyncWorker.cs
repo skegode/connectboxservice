@@ -1,14 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using ConnectBoxService.Models;
 using ConnectBoxService.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace ConnectBoxService
 {
@@ -33,52 +27,83 @@ namespace ConnectBoxService
         {
             _logger.LogInformation("LoanSyncWorker started at {Time}", DateTimeOffset.Now);
 
-            await LoadConnectionsAsync();
-
-            if (_connections.Count == 0)
-            {
-                _logger.LogWarning("No ContractLmsConnections found. Worker will idle.");
-            }
-
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    foreach (var connection in _connections)
+                    // Reload every cycle so contracts added after startup are picked up.
+                    await LoadConnectionsAsync();
+
+                    if (_connections.Count == 0)
                     {
-                        _logger.LogInformation("......................................PAYMENTS DATA");
+                        _logger.LogWarning("No ContractLmsConnections found. Sleeping.");
+                    }
+                    else
+                    {
+                        // catId → entityId for every category that received records this cycle.
+                        var affectedCategories = new Dictionary<int, int>();
 
-                        /// Due for payments fetch
-                        bool paymentsDue = connection.NextPaymentsFetch.HasValue ? connection.NextPaymentsFetch <= DateTime.Now : true;
-
-                        if (paymentsDue)
+                        foreach (var connection in _connections)
                         {
-                            _logger.LogInformation(
-                               "Payments sync for ContractId {ContractId} ({Name}, every {Minutes} mins)...",
-                               connection.ContractId,
-                               connection.PaymentsRefreshCycleName,
-                               connection.PaymentsRefreshCycleMinutes);
+                            if (connection.NextPaymentsFetch.HasValue
+                                    ? connection.NextPaymentsFetch <= DateTime.Now
+                                    : true)
+                            {
+                                _logger.LogInformation(
+                                    "Payments sync — ContractId {ContractId} ({Name}, every {Min} mins).",
+                                    connection.ContractId,
+                                    connection.PaymentsRefreshCycleName,
+                                    connection.PaymentsRefreshCycleMinutes);
 
-                            await SyncPaymentsAsync(connection, stoppingToken);
-                        }
+                                await SyncPaymentsAsync(connection, stoppingToken);
+                            }
 
-                        _logger.LogInformation("......................................RECORDS DATA");
+                            if (connection.NextDataFetch.HasValue
+                                    ? connection.NextDataFetch <= DateTime.Now
+                                    : true)
+                            {
+                                _logger.LogInformation(
+                                    "Data sync — ContractId {ContractId} ({Name}, every {Min} mins).",
+                                    connection.ContractId,
+                                    connection.DataRefreshCycleName,
+                                    connection.DataRefreshCycleMinutes);
 
-                        /// Due for data fetch
-                        bool dataDue = connection.NextDataFetch.HasValue ? connection.NextDataFetch <= DateTime.Now : true;
+                                // UpsertLoansAsync now handles cross-contract placement and logs
+                                // migrations internally. Returns category IDs that received records.
+                                var syncCategories = await SyncContractAsync(connection, stoppingToken);
+                                _lastRunTimes[connection.ContractId] = DateTime.UtcNow;
 
-                        if (dataDue)
-                        {
-                            _logger.LogInformation(
-                                "Syncing ContractId {ContractId} ({Name}, every {Minutes} mins)...",
-                                connection.ContractId,
-                                connection.DataRefreshCycleName,
-                                connection.DataRefreshCycleMinutes);
+                                if (int.TryParse(connection.EntityId, out int entId))
+                                {
+                                    foreach (var catId in syncCategories)
+                                        affectedCategories.TryAdd(catId, entId);
+                                }
 
-                            // --- CALL SYNC AND ALLOCATION ---
-                            await SyncContractAsync(connection, stoppingToken);
+                                // Between-sync migration: handles records whose stored DaysinArrears /
+                                // amounts have drifted since the last LMS fetch. If anything moved,
+                                // add all connection categories so they get re-allocated.
+                                _logger.LogInformation("Running between-sync migration pass...");
+                                int migrated = await MigrateContractRecordsAsync(stoppingToken);
 
-                            _lastRunTimes[connection.ContractId] = DateTime.UtcNow;
+                                if (migrated > 0)
+                                {
+                                    foreach (var c in _connections)
+                                    {
+                                        if (int.TryParse(c.CategoryId, out int catId) && int.TryParse(c.EntityId, out int entyId))
+                                            affectedCategories.TryAdd(catId, entyId);
+                                    }
+                                }
+
+                                // Allocate agents once across all categories that were touched this cycle.
+                                if (affectedCategories.Count > 0)
+                                {
+                                    _logger.LogInformation(
+                                        "Allocating agents for {Count} affected category(ies).",
+                                        affectedCategories.Count);
+
+                                    await AllocateAffectedCategoriesAsync(affectedCategories, stoppingToken);
+                                }
+                            }
                         }
                     }
                 }
@@ -94,17 +119,72 @@ namespace ConnectBoxService
         }
 
         // ─────────────────────────────────────────────────────────────────────
-        // Payments sync  (mirrors SyncContractAsync structure)
+        // Data sync — returns the set of category IDs that received records.
+        // Allocation is intentionally NOT called here; it runs once at the end
+        // of the cycle across all affected categories (including migrations).
+        // ─────────────────────────────────────────────────────────────────────
+        private async Task<HashSet<int>> SyncContractAsync(ContractLmsConnection connection, CancellationToken stoppingToken)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var loanApiService  = scope.ServiceProvider.GetRequiredService<ILoanApiService>();
+                var contractDataSvc = scope.ServiceProvider.GetRequiredService<IContractDataService>();
+
+                if (_cachedToken == null || DateTime.UtcNow >= _tokenExpiry)
+                {
+                    _logger.LogInformation("Requesting new API token for {Entity}...", connection.LmsEntityId);
+                    _cachedToken = await loanApiService.GetTokenAsync(connection.LmsEntityId);
+
+                    if (_cachedToken == null)
+                    {
+                        _logger.LogError("Failed to obtain API token. Skipping ContractId {ContractId}.", connection.ContractId);
+                        return new HashSet<int>();
+                    }
+
+                    _tokenExpiry = DateTime.UtcNow.AddMinutes(55);
+                }
+
+                var loans = await loanApiService.GetLoansAsync(_cachedToken, connection);
+
+                _logger.LogInformation(
+                    "Fetched {Count} loans for ContractId {ContractId}.",
+                    loans.Count, connection.ContractId);
+
+                if (loans.Count == 0)
+                {
+                    _logger.LogWarning("No loans returned for ContractId {ContractId} filters.", connection.ContractId);
+                    return new HashSet<int>();
+                }
+
+                // Upsert handles cross-contract placement: if a loan already exists in
+                // another contract it is moved rather than duplicated, and the migration
+                // is written to ContractMigrationLog inside the same transaction.
+                return await contractDataSvc.UpsertLoansAsync(
+                    connection.ContractId,
+                    connection.EntityId,
+                    connection.CategoryId,
+                    loans);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during data sync for ContractId {ContractId}.", connection.ContractId);
+                return new HashSet<int>();
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Payments sync — fetches payment records directly from LMS API
+        // using the date window since the last successful fetch.
         // ─────────────────────────────────────────────────────────────────────
         private async Task SyncPaymentsAsync(ContractLmsConnection connection, CancellationToken stoppingToken)
         {
             try
             {
                 using var scope = _serviceProvider.CreateScope();
-                var loanApiService = scope.ServiceProvider.GetRequiredService<ILoanApiService>();
+                var loanApiService  = scope.ServiceProvider.GetRequiredService<ILoanApiService>();
                 var contractDataSvc = scope.ServiceProvider.GetRequiredService<IContractDataService>();
 
-                // Token (re-uses / refreshes the worker-level cache)
                 if (_cachedToken == null || DateTime.UtcNow >= _tokenExpiry)
                 {
                     _logger.LogInformation("Requesting new API token for {Entity}...", connection.LmsEntityId);
@@ -118,21 +198,64 @@ namespace ConnectBoxService
                     _tokenExpiry = DateTime.UtcNow.AddMinutes(55);
                 }
 
-                // Fetch current loan snapshot from LMS
-                var freshLoans = await loanApiService.GetLoansAsync(_cachedToken, connection);
+                // Fetch payments since last successful fetch (default 30-day look-back on first run).
+                var dateFrom = (DateTime)connection.LastPaymentsFetch;
+                var dateTo   = DateTime.Now;
 
-                if (freshLoans.Count == 0)
-                {
-                    _logger.LogWarning("No loans returned for payments sync, ContractId {ContractId}.", connection.ContractId);
-                    return;
-                }
+                _logger.LogInformation(
+                    "Fetching payments for ContractId {ContractId} from {From:yyyy-MM-dd} to {To:yyyy-MM-dd}.",
+                    connection.ContractId, dateFrom, dateTo);
 
-                // Detect payments via OutSourcedAmount delta & persist
-                await contractDataSvc.SyncPaymentsAsync(connection.ContractId,connection.EntityId, freshLoans);
+                var freshPayments = await loanApiService.GetPaymentsAsync(_cachedToken, dateFrom, dateTo);
+
+                await contractDataSvc.SyncPaymentsAsync(connection.ContractId, connection.EntityId, freshPayments, connection.CommissionRate);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during payments sync for ContractId {ContractId}.", connection.ContractId);
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Between-sync migration pass — returns count of records moved.
+        // ─────────────────────────────────────────────────────────────────────
+        private async Task<int> MigrateContractRecordsAsync(CancellationToken stoppingToken)
+        {
+            try
+            {
+                using var scope = _serviceProvider.CreateScope();
+                var contractDataSvc = scope.ServiceProvider.GetRequiredService<IContractDataService>();
+                return await contractDataSvc.MigrateRecordsAsync(_connections);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during contract record migration.");
+                return 0;
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Allocate agents for all categories touched this cycle.
+        // ─────────────────────────────────────────────────────────────────────
+        private async Task AllocateAffectedCategoriesAsync(
+            Dictionary<int, int> categoryEntityMap,
+            CancellationToken stoppingToken)
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var contractDataSvc = scope.ServiceProvider.GetRequiredService<IContractDataService>();
+
+            foreach (var (catId, entId) in categoryEntityMap)
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+                try
+                {
+                    await contractDataSvc.AllocateContractsToAgentsAsync(catId, entId);
+                    _logger.LogInformation("Allocation done for CategoryId {CatId}.", catId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Allocation failed for CategoryId {CatId}.", catId);
+                }
             }
         }
 
@@ -143,76 +266,12 @@ namespace ConnectBoxService
                 using var scope = _serviceProvider.CreateScope();
                 var contractService = scope.ServiceProvider.GetRequiredService<IContractService>();
                 _connections = await contractService.GetContractConnectionsAsync();
-
                 _logger.LogInformation("Loaded {Count} contract connection(s).", _connections.Count);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to load contract connections.");
                 _connections = new List<ContractLmsConnection>();
-            }
-        }
-
-        private async Task SyncContractAsync(ContractLmsConnection connection, CancellationToken stoppingToken)
-        {
-            try
-            {
-                using var scope = _serviceProvider.CreateScope();
-                var loanApiService = scope.ServiceProvider.GetRequiredService<ILoanApiService>();
-                var contractDataSvc = scope.ServiceProvider.GetRequiredService<IContractDataService>();
-
-                // ── Step 1: Get token ─────────────────────────────────────
-                if (_cachedToken == null || DateTime.UtcNow >= _tokenExpiry)
-                {
-                    _logger.LogInformation("Requesting new API token for {Entity}...", connection.LmsEntityId);
-                    _cachedToken = await loanApiService.GetTokenAsync(connection.LmsEntityId);
-
-                    if (_cachedToken == null)
-                    {
-                        _logger.LogError("Failed to obtain API token. Skipping ContractId {ContractId}.", connection.ContractId);
-                        return;
-                    }
-
-                    _tokenExpiry = DateTime.UtcNow.AddMinutes(55);
-                }
-
-                // ── Step 2: Fetch loans ───────────────────────────────────
-                var loans = await loanApiService.GetLoansAsync(_cachedToken, connection);
-
-                _logger.LogInformation(
-                    "Fetched {Count} loans for ContractId {ContractId} (EntityId: {EntityId}).",
-                    loans.Count, connection.ContractId, connection.LmsEntityId);
-
-                if (loans.Count == 0)
-                {
-                    _logger.LogWarning("No loans returned for ContractId {ContractId} filters.", connection.ContractId);
-                    return;
-                }
-
-                // ── Step 3: Upsert into ContractData ──────────────────────
-                await contractDataSvc.UpsertLoansAsync(
-                    connection.ContractId,
-                    connection.EntityId,
-                    connection.CategoryId,
-                    loans);
-
-                // ── Step 4: Allocate to Agents Equally (Amount & Count) ──
-                _logger.LogInformation("Allocating {Count} records to agents for Category {CategoryId}...", loans.Count, connection.CategoryId);
-
-                // Parsing to int as required by the Allocate method signature
-                if (int.TryParse(connection.CategoryId, out int catId) && int.TryParse(connection.EntityId, out int entId))
-                {
-                    await contractDataSvc.AllocateContractsToAgentsAsync(catId, entId);
-                    _logger.LogInformation("Allocation successful for ContractId {ContractId}.", connection.ContractId);
-                }
-                else
-                {
-                    _logger.LogError("Failed to parse CategoryId or EntityId for allocation. ContractId: {ContractId}", connection.ContractId);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error during Sync/Allocation for ContractId {ContractId}.", connection.ContractId);
             }
         }
     }

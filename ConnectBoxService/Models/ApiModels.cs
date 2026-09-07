@@ -37,11 +37,14 @@ namespace ConnectBoxService.Models
         public string   PhoneNumber      { get; set; } = "";
         public string   EmailAddress     { get; set; } = "";
         public string   NationalId       { get; set; } = "";
+        public string   Latitude         { get; set; } = "";
+        public string   Longitude        { get; set; } = "";
         public decimal  AmountToDisburse { get; set; }
         public string   RepaymentPeriod  { get; set; } = "";
         public decimal  Arrears          { get; set; }
         public int      DaysInArrears    { get; set; }
         public decimal  LoanBalance      { get; set; }
+        public int?     BranchId         { get; set; }
         public string   Branch           { get; set; } = "";
         public decimal  OutsourcedAmount { get; set; }
         public decimal  Penalty          { get; set; }
@@ -49,5 +52,27 @@ namespace ConnectBoxService.Models
         public string   Agent            { get; set; } = "";
         public string   AgentId          { get; set; } = "";
         public string borrowerId { get; set; } = "";
+    }
+
+    /// <summary>Matches a single payment record from the LMS payments endpoint</summary>
+    public class LmsPaymentDto
+    {
+        public int? LoanId { get; set; }
+        public decimal  Amount       { get; set; }
+        public DateTime TransactedDate { get; set; }
+        public string   MpesaRef     { get; set; } = "";
+    }
+
+    public class PaymentsApiResponse
+    {
+        public bool             Success { get; set; }
+        public string           Message { get; set; } = "";
+        public List<LmsPaymentDto>? Data   { get; set; }
+    }
+
+    public class PaymentsDataList
+    {
+        public int                  Count { get; set; }
+        public List<LmsPaymentDto>  Data  { get; set; } = new();
     }
 }
